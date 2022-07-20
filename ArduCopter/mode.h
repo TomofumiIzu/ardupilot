@@ -2,6 +2,8 @@
 
 #include "Copter.h"
 #include <AP_Math/chirp.h>
+#include <string>
+
 class Parameters;
 class ParametersG2;
 
@@ -39,6 +41,7 @@ public:
         AUTOROTATE =   26,  // Autonomous autorotation
         AUTO_RTL =     27,  // Auto RTL, this is not a true mode, AUTO will report as this mode if entered to perform a DO_LAND_START Landing sequence
         TURTLE =       28,  // Flip over after crash
+        DORAEMON =     66,  // Doraemon mode
     };
 
     // constructor
@@ -1855,3 +1858,82 @@ private:
 
 };
 #endif
+
+class ModeDoraemon : public Mode {
+
+public:
+    // inherit constructor
+    using Mode::Mode;
+    Number mode_number() const override { return Number::DORAEMON; }
+
+    virtual void run() override;
+
+    bool requires_GPS() const override { return false; }
+    bool has_manual_throttle() const override { return true; }
+    bool allows_arming(AP_Arming::Method method) const override { return true; }
+    bool has_user_takeoff(bool must_navigate) const override;
+    bool is_autopilot() const override { return false; }
+    bool allows_save_trim() const override { return true; }
+    bool allows_autotune() const override { return true; }
+    bool allows_flip() const override { return true; }
+
+    bool init(bool ignore_checks) override;
+    void set_velocity(const Vector3f& velocity, bool use_yaw = false, float yaw_cd = 0.0, bool use_yaw_rate = false, float yaw_rate_cds = 0.0, bool yaw_relative = false, bool log_request = true);
+    void set_velaccel(const Vector3f& velocity, const Vector3f& acceleration, bool use_yaw = false, float yaw_cd = 0.0, bool use_yaw_rate = false, float yaw_rate_cds = 0.0, bool yaw_relative = false, bool log_request = true);
+    bool do_user_takeoff_start(float takeoff_alt_cm) override;
+    // return guided mode timeout in milliseconds. Only used for velocity, acceleration, angle control, and angular rate control
+    uint32_t get_timeout_ms() const;
+    bool stabilizing_vel_xy() const;
+    bool stabilizing_pos_xy() const;
+    //bool set_destination(const Location& dest_loc, bool use_yaw = false, float yaw_cd = 0.0, bool use_yaw_rate = false, float yaw_rate_cds = 0.0, bool yaw_relative = false);
+
+
+    enum class SubMode {
+        land,
+        TakeOff,
+        WP,
+        VelAccel,
+        RTL,
+    };
+
+    SubMode submode() const { return d_mode; }
+    int32_t get_latlng_ardu(std::string strnum, uint32_t num_digits = 7);
+    float judge_target(int32_t lat, int32_t lng, int32_t n_lat, int32_t n_lng, int mode = 1);
+
+
+protected:
+
+    const char *name() const override { return "DORAEMON"; }
+    const char *name4() const override { return "DORA"; }
+
+private:
+
+    // enum for GUID_OPTIONS parameter
+    enum class Options : int32_t {
+        AllowArmingFromTX   = (1U << 0),
+        // this bit is still available, pilot yaw was mapped to bit 2 for symmetry with auto
+        IgnorePilotYaw      = (1U << 2),
+        SetAttitudeTarget_ThrustAsThrust = (1U << 3),
+        DoNotStabilizePositionXY = (1U << 4),
+        DoNotStabilizeVelocityXY = (1U << 5),
+        WPNavUsedForPosControl = (1U << 6),
+    };
+
+    void pva_control_start();
+    void velaccel_control_run();
+    void set_yaw_state(bool use_yaw, float yaw_cd, bool use_yaw_rate, float yaw_rate_cds, bool relative_angle);
+
+    SubMode d_mode = SubMode::land;
+    float d_takeoff_alt_cm = 0.0;
+    typedef std::pair<uint32_t, uint32_t> Pair;
+    std::vector<Pair> vp;
+    Pair save_wp;
+    FILE* d_file;
+    bool opn_flg = false;
+    bool end_flg = false;
+    uint32_t step;
+    std::string save_str="";
+    int buff_size = 500;
+    int wrap_byte = 100;
+    float speed = 5.0;
+};

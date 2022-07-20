@@ -217,6 +217,7 @@ public:
     friend class ModeZigZag;
     friend class ModeAutorotate;
     friend class ModeTurtle;
+    friend class ModeDoraemon;
 
     Copter(void);
 
@@ -924,6 +925,7 @@ private:
     ModeAcro mode_acro;
 #endif
 #endif
+    ModeDoraemon mode_doraemon;
     ModeAltHold mode_althold;
 #if MODE_AUTO_ENABLED == ENABLED
     ModeAuto mode_auto;
