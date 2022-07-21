@@ -49,8 +49,10 @@
 #include <AP_Frsky_Telem/AP_Frsky_Parameters.h>
 #include <AP_ExternalAHRS/AP_ExternalAHRS.h>
 #include <AP_VideoTX/AP_SmartAudio.h>
+#include <AP_VideoTX/AP_Tramp.h>
 #include <SITL/SITL.h>
 #include <AP_CustomRotations/AP_CustomRotations.h>
+#include <AP_AIS/AP_AIS.h>
 
 class AP_Vehicle : public AP_HAL::HAL::Callbacks {
 
@@ -221,6 +223,9 @@ public:
     // set turn rate in deg/sec and speed in meters/sec (for use by scripting with Rover)
     virtual bool set_desired_turn_rate_and_speed(float turn_rate, float speed) { return false; }
 
+   // set auto mode speed in meters/sec (for use by scripting with Copter/Rover)
+    virtual bool set_desired_speed(float speed) { return false; }
+
     // support for NAV_SCRIPT_TIME mission command
     virtual bool nav_script_time(uint16_t &id, uint8_t &cmd, float &arg1, float &arg2) { return false; }
     virtual void nav_script_time_done(uint16_t id) {}
@@ -374,6 +379,10 @@ protected:
     AP_SmartAudio smartaudio;
 #endif
 
+#if AP_TRAMP_ENABLED
+    AP_Tramp tramp;
+#endif
+
 #if HAL_EFI_ENABLED
     // EFI Engine Monitor
     AP_EFI efi;
@@ -381,6 +390,11 @@ protected:
 
 #if AP_AIRSPEED_ENABLED
     AP_Airspeed airspeed;
+#endif
+
+#if AP_AIS_ENABLED
+    // Automatic Identification System - for tracking sea-going vehicles
+    AP_AIS ais;
 #endif
 
     static const struct AP_Param::GroupInfo var_info[];

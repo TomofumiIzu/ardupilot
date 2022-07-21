@@ -45,6 +45,7 @@
 #include <AP_EFI/AP_EFI.h>
 #include <AP_Proximity/AP_Proximity.h>
 #include <AP_Scripting/AP_Scripting.h>
+#include <SRV_Channel/SRV_Channel.h>
 #include <AP_Winch/AP_Winch.h>
 #include <AP_OSD/AP_OSD.h>
 #include <AP_RCTelemetry/AP_CRSF_Telem.h>
@@ -113,22 +114,25 @@ GCS_MAVLINK::GCS_MAVLINK(GCS_MAVLINK_Parameters &parameters,
 
 bool GCS_MAVLINK::init(uint8_t instance)
 {
-    // search for serial port
-    const AP_SerialManager& serial_manager = AP::serialmanager();
-
-    const AP_SerialManager::SerialProtocol protocol = AP_SerialManager::SerialProtocol_MAVLink;
-
     // get associated mavlink channel
-    if (!serial_manager.get_mavlink_channel(protocol, instance, chan)) {
-        // return immediately in unlikely case mavlink channel cannot be found
-        return false;
-    }
-    // and init the gcs instance
+    chan = (mavlink_channel_t)(MAVLINK_COMM_0 + instance);
     if (!valid_channel(chan)) {
         return false;
     }
 
-    if (!serial_manager.should_forward_mavlink_telemetry(protocol, instance)) {
+    // find instance of MAVLink protocol; the protocol_match method in
+    // AP_SerialManager means this will match MAVLink2 and MAVLinkHL,
+    // too:
+    uartstate = AP::serialmanager().find_protocol_instance(AP_SerialManager::SerialProtocol_MAVLink, instance);
+    if (uartstate == nullptr) {
+        return false;
+    }
+
+    // and init the gcs instance
+
+    // whether this port is considered "private" is stored on the uart
+    // rather than in our own parameters:
+    if (uartstate->option_enabled(AP_HAL::UARTDriver::OPTION_MAVLINK_NO_FORWARD)) {
         set_channel_private(chan);
     }
 
@@ -154,11 +158,11 @@ bool GCS_MAVLINK::init(uint8_t instance)
     _port->set_flow_control(old_flow_control);
 
     // now change back to desired baudrate
-    _port->begin(serial_manager.find_baudrate(protocol, instance));
+    _port->begin(uartstate->baudrate());
 
     mavlink_comm_port[chan] = _port;
 
-    AP_SerialManager::SerialProtocol mavlink_protocol = serial_manager.get_mavlink_protocol(chan);
+    const auto mavlink_protocol = uartstate->get_protocol();
     mavlink_status_t *status = mavlink_get_channel_status(chan);
     if (status == nullptr) {
         return false;
@@ -168,7 +172,7 @@ bool GCS_MAVLINK::init(uint8_t instance)
         mavlink_protocol == AP_SerialManager::SerialProtocol_MAVLinkHL) {
         // load signing key
         load_signing_key();
-    } else if (status) {
+    } else {
         // user has asked to only send MAVLink1
         status->flags |= MAVLINK_STATUS_FLAG_OUT_MAVLINK1;
     }
@@ -240,36 +244,75 @@ void GCS_MAVLINK::send_battery_status(const uint8_t instance) const
     bool got_temperature = battery.get_temperature(temp, instance);
 
     // prepare arrays of individual cell voltages
-    uint16_t cell_volts[MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_LEN];
-    uint16_t cell_volts_ext[MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_EXT_LEN];
+    uint16_t cell_mvolts[MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_LEN];
+    uint16_t cell_mvolts_ext[MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_EXT_LEN];
+    const uint16_t max_cell_mV = 0xFFFEU;
+    const uint16_t invalid_cell_mV = 0xFFFFU;
+
     if (battery.has_cell_voltages(instance)) {
         const AP_BattMonitor::cells& batt_cells = battery.get_cell_voltages(instance);
+        static_assert(sizeof(cell_mvolts) <= sizeof(batt_cells.cells), "cell array length not large enough");
+
         // copy the first 10 cells
-        memcpy(cell_volts, batt_cells.cells, sizeof(cell_volts));
+        memcpy(cell_mvolts, batt_cells.cells, sizeof(cell_mvolts));
         // 11 ... 14 use a second cell_volts_ext array
         for (uint8_t i = 0; i < MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_EXT_LEN; i++) {
             if (MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_LEN+i < uint8_t(ARRAY_SIZE(batt_cells.cells))) {
-                cell_volts_ext[i] = batt_cells.cells[MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_LEN+i];
+                cell_mvolts_ext[i] = batt_cells.cells[MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_LEN+i];
             } else {
-                cell_volts_ext[i] = 0;
+                cell_mvolts_ext[i] = 0;
+            }
+        }
+        /*
+          now adjust voltages to cope with two things:
+             1) we may be reporting sag corrected voltage
+             2) the battery may have more cells than can be reported by the backend, so the actual voltage may be higher than the sum
+        */
+        const float voltage_mV = battery.gcs_voltage(instance) * 1e3f;
+        float voltage_mV_sum = 0;
+        uint8_t non_zero_cell_count = 0;
+        for (uint8_t i=0; i<MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_LEN; i++) {
+            if (cell_mvolts[i] > 0 && cell_mvolts[i] != invalid_cell_mV) {
+                non_zero_cell_count++;
+                voltage_mV_sum += cell_mvolts[i];
+            }
+        }
+        for (uint8_t i=0; i<MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_EXT_LEN; i++) {
+            if (cell_mvolts_ext[i] > 0 && cell_mvolts_ext[i] != invalid_cell_mV) {
+                non_zero_cell_count++;
+                voltage_mV_sum += cell_mvolts_ext[i];
+            }
+        }
+        if (voltage_mV > voltage_mV_sum && non_zero_cell_count > 0) {
+            // distribute the extra voltage over the non-zero cells
+            uint32_t extra_mV = (voltage_mV - voltage_mV_sum) / non_zero_cell_count;
+            for (uint8_t i=0; i<MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_LEN; i++) {
+                if (cell_mvolts[i] > 0 && cell_mvolts[i] != invalid_cell_mV) {
+                    cell_mvolts[i] = MIN(cell_mvolts[i] + extra_mV, max_cell_mV);
+                }
+            }
+            for (uint8_t i=0; i<MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_EXT_LEN; i++) {
+                if (cell_mvolts_ext[i] > 0 && cell_mvolts_ext[i] != invalid_cell_mV) {
+                    cell_mvolts_ext[i] = MIN(cell_mvolts_ext[i] + extra_mV, max_cell_mV);
+                }
             }
         }
     } else {
         // for battery monitors that cannot provide voltages for individual cells the battery's total voltage is put into the first cell
         // if the total voltage cannot fit into a single field, the remainder into subsequent fields.
         // the GCS can then recover the pack voltage by summing all non ignored cell values an we can report a pack up to 655.34 V
-        float voltage = battery.gcs_voltage(instance) * 1e3f;
+        float voltage_mV = battery.gcs_voltage(instance) * 1e3f;
         for (uint8_t i = 0; i < MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_LEN; i++) {
-          if (voltage < 0.001f) {
+          if (voltage_mV < 0.001f) {
               // too small to send to the GCS, set it to the no cell value
-              cell_volts[i] = UINT16_MAX;
+              cell_mvolts[i] = UINT16_MAX;
           } else {
-              cell_volts[i] = MIN(voltage, 65534.0f); // Can't send more then UINT16_MAX - 1 in a cell
-              voltage -= 65534.0f;
+              cell_mvolts[i] = MIN(voltage_mV, max_cell_mV); // Can't send more then UINT16_MAX - 1 in a cell
+              voltage_mV -= max_cell_mV;
           }
         }
         for (uint8_t i = 0; i < MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_EXT_LEN; i++) {
-            cell_volts_ext[i] = 0;
+            cell_mvolts_ext[i] = 0;
         }
     }
 
@@ -299,14 +342,14 @@ void GCS_MAVLINK::send_battery_status(const uint8_t instance) const
                                     MAV_BATTERY_FUNCTION_UNKNOWN, // function
                                     MAV_BATTERY_TYPE_UNKNOWN, // type
                                     got_temperature ? ((int16_t) (temp * 100)) : INT16_MAX, // temperature. INT16_MAX if unknown
-                                    cell_volts, // cell voltages
+                                    cell_mvolts, // cell voltages
                                     current,      // current in centiampere
                                     consumed_mah, // total consumed current in milliampere.hour
                                     consumed_wh,  // consumed energy in hJ (hecto-Joules)
                                     percentage,
                                     time_remaining, // time remaining, seconds
                                     battery.get_mavlink_charge_state(instance), // battery charge state
-                                    cell_volts_ext, // Cell 11..14 voltages
+                                    cell_mvolts_ext, // Cell 11..14 voltages
                                     0, // battery mode
                                     battery.get_mavlink_fault_bitmask(instance));   // fault_bitmask
 #else
@@ -1433,10 +1476,11 @@ void GCS_MAVLINK::packetReceived(const mavlink_status_t &status,
     if (msg.msgid != MAVLINK_MSG_ID_RADIO && msg.msgid != MAVLINK_MSG_ID_RADIO_STATUS) {
         mavlink_active |= (1U<<(chan-MAVLINK_COMM_0));
     }
+    const auto mavlink_protocol = uartstate->get_protocol();
     if (!(status.flags & MAVLINK_STATUS_FLAG_IN_MAVLINK1) &&
         (status.flags & MAVLINK_STATUS_FLAG_OUT_MAVLINK1) &&
-        (AP::serialmanager().get_mavlink_protocol(chan) == AP_SerialManager::SerialProtocol_MAVLink2 ||
-         AP::serialmanager().get_mavlink_protocol(chan) == AP_SerialManager::SerialProtocol_MAVLinkHL)) {
+        (mavlink_protocol == AP_SerialManager::SerialProtocol_MAVLink2 ||
+         mavlink_protocol == AP_SerialManager::SerialProtocol_MAVLinkHL)) {
         // if we receive any MAVLink2 packets on a connection
         // currently sending MAVLink1 then switch to sending
         // MAVLink2
@@ -5540,6 +5584,16 @@ bool GCS_MAVLINK::try_send_message(const enum ap_message id)
 #endif // HAL_HIGH_LATENCY2_ENABLED
         break;
 
+    case MSG_AIS_VESSEL: {
+#if AP_AIS_ENABLED
+        AP_AIS *ais = AP_AIS::get_singleton();
+        if (ais) {
+            ais->send(chan);
+        }
+#endif
+        break;
+    }
+
 
     case MSG_UAVIONIX_ADSB_OUT_STATUS:
         CHECK_PAYLOAD_SIZE(UAVIONIX_ADSB_OUT_STATUS);
@@ -6037,7 +6091,7 @@ uint64_t GCS_MAVLINK::capabilities() const
     uint64_t ret = MAV_PROTOCOL_CAPABILITY_PARAM_FLOAT |
         MAV_PROTOCOL_CAPABILITY_COMPASS_CALIBRATION;
 
-    AP_SerialManager::SerialProtocol mavlink_protocol = AP::serialmanager().get_mavlink_protocol(chan);
+    const auto mavlink_protocol = uartstate->get_protocol();
     if (mavlink_protocol == AP_SerialManager::SerialProtocol_MAVLink2 || mavlink_protocol == AP_SerialManager::SerialProtocol_MAVLinkHL) {
         ret |= MAV_PROTOCOL_CAPABILITY_MAVLINK2;
     }

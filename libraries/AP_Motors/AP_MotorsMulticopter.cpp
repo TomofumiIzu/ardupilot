@@ -16,6 +16,7 @@
 #include "AP_MotorsMulticopter.h"
 #include <AP_HAL/AP_HAL.h>
 #include <AP_BattMonitor/AP_BattMonitor.h>
+#include <SRV_Channel/SRV_Channel.h>
 #include <AP_Logger/AP_Logger.h>
 
 extern const AP_HAL::HAL& hal;
@@ -516,8 +517,8 @@ void AP_MotorsMulticopter::update_throttle_range()
     // if all outputs are digital adjust the range. We also do this for type PWM_RANGE, as those use the
     // scaled output, which is then mapped to PWM via the SRV_Channel library
     if (SRV_Channels::have_digital_outputs(get_motor_mask()) || (_pwm_type == PWM_TYPE_PWM_RANGE)) {
-        _pwm_min = 1000;
-        _pwm_max = 2000;
+        _pwm_min.set_and_default(1000);
+        _pwm_max.set_and_default(2000);
     }
 
     hal.rcout->set_esc_scaling(get_pwm_output_min(), get_pwm_output_max());
@@ -556,6 +557,7 @@ void AP_MotorsMulticopter::output_logic()
         _spool_up_time.set(0.05);
     }
 
+    const float spool_step = 1.0f / (_spool_up_time * _loop_rate);
     switch (_spool_state) {
     case SpoolState::SHUT_DOWN:
         // Motors should be stationary.
@@ -595,7 +597,6 @@ void AP_MotorsMulticopter::output_logic()
         limit.throttle_upper = true;
 
         // set and increment ramp variables
-        float spool_step = 1.0f / (_spool_up_time * _loop_rate);
         switch (_spool_desired) {
         case DesiredSpoolState::SHUT_DOWN:
             _spin_up_ratio -= spool_step;
@@ -649,7 +650,7 @@ void AP_MotorsMulticopter::output_logic()
 
         // set and increment ramp variables
         _spin_up_ratio = 1.0f;
-        _throttle_thrust_max += 1.0f / (_spool_up_time * _loop_rate);
+        _throttle_thrust_max += spool_step;
 
         // constrain ramp value and update mode
         if (_throttle_thrust_max >= MIN(get_throttle(), get_current_limit_max_throttle())) {
@@ -661,7 +662,7 @@ void AP_MotorsMulticopter::output_logic()
 
         // initialise motor failure variables
         _thrust_boost = false;
-        _thrust_boost_ratio = MAX(0.0, _thrust_boost_ratio - 1.0 / (_spool_up_time * _loop_rate));
+        _thrust_boost_ratio = MAX(0.0, _thrust_boost_ratio - spool_step);
         break;
 
     case SpoolState::THROTTLE_UNLIMITED:
@@ -686,9 +687,9 @@ void AP_MotorsMulticopter::output_logic()
         _throttle_thrust_max = get_current_limit_max_throttle();
 
         if (_thrust_boost && !_thrust_balanced) {
-            _thrust_boost_ratio = MIN(1.0, _thrust_boost_ratio + 1.0f / (_spool_up_time * _loop_rate));
+            _thrust_boost_ratio = MIN(1.0, _thrust_boost_ratio + spool_step);
         } else {
-            _thrust_boost_ratio = MAX(0.0, _thrust_boost_ratio - 1.0f / (_spool_up_time * _loop_rate));
+            _thrust_boost_ratio = MAX(0.0, _thrust_boost_ratio - spool_step);
         }
         break;
 
@@ -711,7 +712,7 @@ void AP_MotorsMulticopter::output_logic()
 
         // set and increment ramp variables
         _spin_up_ratio = 1.0f;
-        _throttle_thrust_max -= 1.0f / (_spool_up_time * _loop_rate);
+        _throttle_thrust_max -= spool_step;
 
         // constrain ramp value and update mode
         if (_throttle_thrust_max <= 0.0f) {
@@ -723,7 +724,7 @@ void AP_MotorsMulticopter::output_logic()
             _spool_state = SpoolState::GROUND_IDLE;
         }
 
-        _thrust_boost_ratio = MAX(0.0, _thrust_boost_ratio - 1.0f / (_spool_up_time * _loop_rate));
+        _thrust_boost_ratio = MAX(0.0, _thrust_boost_ratio - spool_step);
         break;
     }
 }

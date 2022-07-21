@@ -1113,6 +1113,12 @@ function esc_telem:get_temperature(instance) end
 ---@return number|nil
 function esc_telem:get_rpm(instance) end
 
+-- update RPM for an ESC
+---@param param1 integer -- ESC number
+---@param param2 integer -- RPM
+---@param param3 number -- error rate
+function esc_telem:update_rpm(esc_index, rpm, error_rate) end
+
 
 -- desc
 ---@class optical_flow
@@ -1432,6 +1438,11 @@ function vehicle:set_velocity_match(param1) end
 ---@param param1 integer
 ---@return boolean
 function vehicle:nav_scripting_enable(param1) end
+
+-- desc sets autopilot nav speed (Copter and Rover)
+---@param param1 number
+---@return boolean
+function vehicle:set_desired_speed(param1) end
 
 -- desc
 ---@param param1 number

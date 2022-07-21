@@ -54,16 +54,11 @@
 #define REPLAY_LOG_NEW_MSG_MAX 230
 #define REPLAY_LOG_NEW_MSG_MIN 220
 
-#include <AC_PID/AC_PID.h>
 #include <AP_HAL/AP_HAL.h>
-#include <AP_AHRS/AP_AHRS.h>
-#include <AP_AHRS/AP_AHRS_DCM.h>
 #include <AP_Common/AP_Common.h>
 #include <AP_Param/AP_Param.h>
 #include <AP_Mission/AP_Mission.h>
 #include <AP_Logger/LogStructure.h>
-#include <AP_Motors/AP_Motors.h>
-#include <AP_Rally/AP_Rally.h>
 #include <AP_Vehicle/ModeReason.h>
 
 #include <stdint.h>
@@ -71,8 +66,6 @@
 #include "LoggerMessageWriter.h"
 
 class AP_Logger_Backend;
-class AP_AHRS;
-class AP_AHRS_View;
 
 // do not do anything here apart from add stuff; maintaining older
 // entries means log analysis is easier
@@ -313,7 +306,7 @@ public:
                                const AP_Mission::Mission_Command &cmd);
     void Write_RallyPoint(uint8_t total,
                           uint8_t sequence,
-                          const RallyLocation &rally_point);
+                          const class RallyLocation &rally_point);
     void Write_SRTL(bool active, uint16_t num_points, uint16_t max_points, uint8_t action, const Vector3f& point);
     void Write_Winch(bool healthy, bool thread_end, bool moving, bool clutch, uint8_t mode, float desired_length, float length, float desired_rate, uint16_t tension, float voltage, int8_t temp);
     void Write_PSCN(float pos_target, float pos, float vel_desired, float vel_target, float vel, float accel_desired, float accel_target, float accel);
@@ -328,7 +321,7 @@ public:
     void WriteCritical(const char *name, const char *labels, const char *units, const char *mults, const char *fmt, ...);
     void WriteV(const char *name, const char *labels, const char *units, const char *mults, const char *fmt, va_list arg_list, bool is_critical=false, bool is_streaming=false);
 
-    void Write_PID(uint8_t msg_type, const AP_PIDInfo &info);
+    void Write_PID(uint8_t msg_type, const class AP_PIDInfo &info);
 
     // returns true if logging of a message should be attempted
     bool should_log(uint32_t mask) const;
@@ -351,7 +344,7 @@ public:
     // number of blocks that have been dropped
     uint32_t num_dropped(void) const;
 
-    // accesss to public parameters
+    // access to public parameters
     void set_force_log_disarmed(bool force_logging) { _force_log_disarmed = force_logging; }
     void set_long_log_persist(bool b) { _force_long_log_persist = b; }
     bool log_while_disarmed(void) const;
@@ -487,7 +480,7 @@ private:
 
     bool _armed;
 
-    // state to help us not log unneccesary RCIN values:
+    // state to help us not log unnecessary RCIN values:
     bool should_log_rcin2;
 
     void Write_Compass_instance(uint64_t time_us, uint8_t mag_instance);

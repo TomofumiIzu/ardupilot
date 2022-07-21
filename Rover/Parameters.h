@@ -415,16 +415,14 @@ public:
     AP_Torqeedo torqeedo;
 #endif
 
-#if HAL_AIS_ENABLED
-    // Automatic Identification System - for tracking sea-going vehicles
-    AP_AIS ais;
-#endif
-
     // position controller
     AR_PosControl pos_control;
 
     // guided options bitmask
     AP_Int32 guided_options;
+
+    // Rover options
+    AP_Int32 manual_options;
 };
 
 extern const AP_Param::Info var_info[];

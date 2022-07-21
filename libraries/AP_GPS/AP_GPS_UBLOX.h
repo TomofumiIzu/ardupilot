@@ -20,10 +20,12 @@
 //  UBlox Lea6H protocol: http://www.u-blox.com/images/downloads/Product_Docs/u-blox6_ReceiverDescriptionProtocolSpec_%28GPS.G6-SW-10018%29.pdf
 #pragma once
 
-#include <AP_HAL/AP_HAL.h>
-
 #include "AP_GPS.h"
 #include "GPS_Backend.h"
+
+#if AP_GPS_UBLOX_ENABLED
+
+#include <AP_HAL/AP_HAL.h>
 
 /*
  *  try to put a UBlox into binary mode. This is in two parts. 
@@ -809,3 +811,5 @@ private:
     RTCM3_Parser *rtcm3_parser;
 #endif // GPS_MOVING_BASELINE
 };
+
+#endif

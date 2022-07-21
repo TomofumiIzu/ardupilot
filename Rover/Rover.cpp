@@ -130,9 +130,6 @@ const AP_Scheduler::Task Rover::scheduler_tasks[] = {
 #if ADVANCED_FAILSAFE == ENABLED
     SCHED_TASK(afs_fs_check,           10,    200, 129),
 #endif
-#if HAL_AIS_ENABLED
-    SCHED_TASK_CLASS(AP_AIS, &rover.g2.ais, update, 5, 100, 135),
-#endif
 };
 
 
@@ -212,6 +209,12 @@ bool Rover::set_desired_turn_rate_and_speed(float turn_rate, float speed)
     // set turn rate and speed. Turn rate is expected in centidegrees/s and speed in meters/s
     mode_guided.set_desired_turn_rate_and_speed(turn_rate * 100.0f, speed);
     return true;
+}
+
+// set desired nav speed (m/s). Used for scripting.
+bool Rover::set_desired_speed(float speed)
+{
+    return control_mode->set_desired_speed(speed);
 }
 
 // get control output (for use in scripting)

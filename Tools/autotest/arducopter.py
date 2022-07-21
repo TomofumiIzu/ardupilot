@@ -4778,7 +4778,6 @@ class AutoTestCopter(AutoTest):
                 raise e
 
             self.progress("Testing mount ROI behaviour")
-            self.drain_mav_unparsed()
             self.test_mount_pitch(0, 0.1, mavutil.mavlink.MAV_MOUNT_MODE_RC_TARGETING)
             start = self.mav.location()
             self.progress("start=%s" % str(start))
@@ -6606,9 +6605,6 @@ class AutoTestCopter(AutoTest):
             })
             self.reboot_sitl()
             self.set_parameters({
-                "EK3_DRAG_BCOEF_X": 361.000000,
-                "EK3_DRAG_BCOEF_Y": 361.000000,
-                "EK3_DRAG_MCOEF": 0.082000,
                 "BARO1_WCF_FWD": -0.300000,
                 "BARO1_WCF_BCK": -0.300000,
                 "BARO1_WCF_RGT": 0.300000,
@@ -6671,7 +6667,6 @@ class AutoTestCopter(AutoTest):
             raise ex
 
     def wait_generator_speed_and_state(self, rpm_min, rpm_max, want_state, timeout=240):
-        self.drain_mav()
         tstart = self.get_sim_time()
         while True:
             if self.get_sim_time_cached() - tstart > timeout:
@@ -6707,7 +6702,6 @@ class AutoTestCopter(AutoTest):
         self.wait_statustext("requested state is not RUN", timeout=60)
 
         self.set_message_rate_hz("GENERATOR_STATUS", 10)
-        self.drain_mav_unparsed()
 
         self.wait_generator_speed_and_state(0, 0, mavutil.mavlink.MAV_GENERATOR_STATUS_FLAG_OFF)
 
@@ -6815,7 +6809,6 @@ class AutoTestCopter(AutoTest):
         self.progress("Reset mission")
         self.set_rc(7, 2000)
         self.delay_sim_time(1)
-        self.drain_mav()
         self.wait_current_waypoint(0, timeout=10)
         self.set_rc(7, 1000)
 
@@ -8286,15 +8279,15 @@ class AutoTestCopter(AutoTest):
 
         # move vehicle on x direction
         location = self.offset_location_ne(location=self.mav.location(), metres_north=0, metres_east=-300)
-        self.mav.mav.set_position_target_local_ned_send(
+        self.mav.mav.set_position_target_global_int_send(
             0, # system time in milliseconds
             1, # target system
             1, # target component
-            mavutil.mavlink.MAV_FRAME_BODY_NED, # coordinate frame MAV_FRAME_BODY_NED
+            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT, # coordinate frame MAV_FRAME_BODY_NED
             MAV_POS_TARGET_TYPE_MASK.POS_ONLY, # type mask (pos only)
-            300, # position x
-            0, # position y
-            0, # position z
+            int(location.lat*1e7), # position x
+            int(location.lng*1e7), # position y
+            30, # position z
             0, # velocity x
             0, # velocity y
             0, # velocity z
@@ -8429,6 +8422,65 @@ class AutoTestCopter(AutoTest):
             timeout=60,
         )
 
+        self.wait_disarmed()
+
+    def AUTO_LAND_TO_BRAKE(self):
+        '''ensure terrain altitude is taken into account when braking'''
+        self.load_mission('mission.txt')
+        home_loc = self.get_home_tuple_from_mission("mission.txt")
+
+        self.set_parameters({
+            "PLND_ACC_P_NSE": 2.500000,
+            "PLND_ALT_MAX": 8.000000,
+            "PLND_ALT_MIN": 0.750000,
+            "PLND_BUS": -1,
+            "PLND_CAM_POS_X": 0.000000,
+            "PLND_CAM_POS_Y": 0.000000,
+            "PLND_CAM_POS_Z": 0.000000,
+            "PLND_ENABLED": 1,
+            "PLND_EST_TYPE": 1,
+            "PLND_LAG": 0.020000,
+            "PLND_LAND_OFS_X": 0.000000,
+            "PLND_LAND_OFS_Y": 0.000000,
+            "PLND_OPTIONS": 0,
+            "PLND_RET_BEHAVE": 0,
+            "PLND_RET_MAX": 4,
+            "PLND_STRICT": 1,
+            "PLND_TIMEOUT": 4.000000,
+            "PLND_TYPE": 4,
+            "PLND_XY_DIST_MAX": 2.500000,
+            "PLND_YAW_ALIGN": 0.000000,
+
+            "SIM_PLD_ALT_LMT": 15.000000,
+            "SIM_PLD_DIST_LMT": 10.000000,
+            "SIM_PLD_ENABLE": 1,
+            "SIM_PLD_HEIGHT": 942.0000000,
+            "SIM_PLD_LAT": -20.558929,
+            "SIM_PLD_LON": -47.415035,
+            "SIM_PLD_RATE": 100,
+            "SIM_PLD_TYPE": 1,
+            "SIM_PLD_YAW": 87,
+
+            "SIM_SONAR_SCALE": 12,
+        })
+
+        self.set_analog_rangefinder_parameters()
+
+        self.customise_SITL_commandline([
+            "--home", "%s,%s,%s,%s" % home_loc
+        ])
+
+        self.set_parameter('AUTO_OPTIONS', 3)
+        self.change_mode('AUTO')
+        self.wait_ready_to_arm()
+        self.arm_vehicle()
+
+        self.wait_current_waypoint(7)
+        self.wait_altitude(10, 15, relative=True, timeout=60)
+        self.change_mode('BRAKE')
+        # monitor altitude here
+        self.wait_altitude(10, 15, relative=True, minimum_duration=20)
+        self.change_mode('AUTO')
         self.wait_disarmed()
 
     # a wrapper around all the 1A,1B,1C..etc tests for travis
@@ -8618,6 +8670,48 @@ class AutoTestCopter(AutoTest):
         # last line is empty, so -2 here
         if not lines[-2].startswith("AP_Vehicle::update_arming"):
             raise NotAchievedException("Expected EFI last not (%s)" % lines[-2])
+
+    def RTL_TO_RALLY(self, target_system=1, target_component=1):
+        self.wait_ready_to_arm()
+        rally_loc = self.home_relative_loc_ne(50, -25)
+        rally_alt = 37
+        items = [
+            self.mav.mav.mission_item_int_encode(
+                target_system,
+                target_component,
+                0, # seq
+                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+                mavutil.mavlink.MAV_CMD_NAV_RALLY_POINT,
+                0, # current
+                0, # autocontinue
+                0, # p1
+                0, # p2
+                0, # p3
+                0, # p4
+                int(rally_loc.lat * 1e7), # latitude
+                int(rally_loc.lng * 1e7), # longitude
+                rally_alt, # altitude
+                mavutil.mavlink.MAV_MISSION_TYPE_RALLY),
+        ]
+        self.upload_using_mission_protocol(
+            mavutil.mavlink.MAV_MISSION_TYPE_RALLY,
+            items
+        )
+        self.set_parameters({
+            'RALLY_INCL_HOME': 0,
+        })
+        self.takeoff(10)
+        self.change_mode('RTL')
+        self.wait_location(rally_loc)
+        self.assert_altitude(rally_alt, relative=True)
+        self.progress("Ensuring we're descending")
+        self.wait_altitude(20, 25, relative=True)
+        self.change_mode('LOITER')
+        self.progress("Flying home")
+        self.clear_mission(mavutil.mavlink.MAV_MISSION_TYPE_RALLY)
+        self.change_mode('RTL')
+        self.wait_disarmed()
+        self.assert_at_home()
 
     def tests1a(self):
         '''return list of all tests'''
@@ -9108,6 +9202,10 @@ class AutoTestCopter(AutoTest):
                  "Check SMART_RTL",
                  self.test_SMART_RTL),
 
+            Test("RTL_TO_RALLY",
+                 "Check RTL to rally point",
+                 self.RTL_TO_RALLY),
+
             Test("FlyEachFrame",
                  "Fly each supported internal frame",
                  self.fly_each_frame),
@@ -9155,6 +9253,10 @@ class AutoTestCopter(AutoTest):
             Test("DO_CHANGE_SPEED",
                  "Change speed during misison using waypoint items",
                  self.DO_CHANGE_SPEED),
+
+            Test("AUTO_LAND_TO_BRAKE",
+                 "Change to LAND while descending in AUTO land phase",
+                 self.AUTO_LAND_TO_BRAKE),
 
             Test("WPNAV_SPEED",
                  "Change speed during misison",

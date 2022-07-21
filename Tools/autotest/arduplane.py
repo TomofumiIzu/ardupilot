@@ -802,7 +802,6 @@ class AutoTestPlane(AutoTest):
         # waypoint:
         self.wait_distance_to_waypoint(8, 100, 10000000)
         self.set_current_waypoint(8)
-        self.drain_mav()
         # TODO: reflect on file to find this magic waypoint number?
         #        self.wait_waypoint(7, num_wp-1, timeout=500) # we
         #        tend to miss the final waypoint by a fair bit, and
@@ -991,8 +990,8 @@ class AutoTestPlane(AutoTest):
             raise NotAchievedException("Did not go via circle mode")
         self.progress("Ensure we've had our throttle squashed to 950")
         self.wait_rc_channel_value(3, 950)
-        self.drain_mav_unparsed()
-        m = self.mav.recv_match(type='SYS_STATUS', blocking=True)
+        self.do_timesync_roundtrip()
+        m = self.assert_receive_message('SYS_STATUS')
         self.progress("Got (%s)" % str(m))
         self.progress("Testing receiver enabled")
         if (not (m.onboard_control_sensors_enabled & receiver_bit)):
@@ -1005,10 +1004,10 @@ class AutoTestPlane(AutoTest):
 #        if (m.onboard_control_sensors_health & receiver_bit):
 #            raise NotAchievedException("Sensor healthy when it shouldn't be")
         self.set_parameter("SIM_RC_FAIL", 0)
-        self.drain_mav_unparsed()
         # have to allow time for RC to be fetched from SITL
         self.delay_sim_time(0.5)
-        m = self.mav.recv_match(type='SYS_STATUS', blocking=True)
+        self.do_timesync_roundtrip()
+        m = self.assert_receive_message('SYS_STATUS')
         self.progress("Testing receiver enabled")
         if (not (m.onboard_control_sensors_enabled & receiver_bit)):
             raise NotAchievedException("Receiver not enabled")
@@ -1027,8 +1026,8 @@ class AutoTestPlane(AutoTest):
         if (not self.get_mode_from_mode_mapping("CIRCLE") in
                 [x.custom_mode for x in self.context_stop_collecting("HEARTBEAT")]):
             raise NotAchievedException("Did not go via circle mode")
-        self.drain_mav_unparsed()
-        m = self.mav.recv_match(type='SYS_STATUS', blocking=True)
+        self.do_timesync_roundtrip()
+        m = self.assert_receive_message('SYS_STATUS')
         self.progress("Got (%s)" % str(m))
         self.progress("Testing receiver enabled")
         if (not (m.onboard_control_sensors_enabled & receiver_bit)):
@@ -1044,8 +1043,8 @@ class AutoTestPlane(AutoTest):
         # have to allow time for RC to be fetched from SITL
         self.progress("Giving receiver time to recover")
         self.delay_sim_time(0.5)
-        self.drain_mav_unparsed()
-        m = self.mav.recv_match(type='SYS_STATUS', blocking=True)
+        self.do_timesync_roundtrip()
+        m = self.assert_receive_message('SYS_STATUS')
         self.progress("Testing receiver enabled")
         if (not (m.onboard_control_sensors_enabled & receiver_bit)):
             raise NotAchievedException("Receiver not enabled")
@@ -1147,12 +1146,11 @@ class AutoTestPlane(AutoTest):
         self.set_parameter("SIM_RC_FAIL", 2) # throttle-to-950
         self.wait_mode("CIRCLE")
         self.delay_sim_time(1) # give
-        self.drain_mav_unparsed()
+        self.do_timesync_roundtrip()
 
         self.progress("Checking fence is OK after receiver failure (bind-values)")
         fence_bit = mavutil.mavlink.MAV_SYS_STATUS_GEOFENCE
-        m = self.mav.recv_match(type='SYS_STATUS', blocking=True)
-        self.progress("Got (%s)" % str(m))
+        m = self.assert_receive_message('SYS_STATUS')
         if (not (m.onboard_control_sensors_enabled & fence_bit)):
             raise NotAchievedException("Fence not enabled after RC fail")
         self.do_fence_disable() # Ensure the fence is disabled after test
@@ -1179,7 +1177,7 @@ class AutoTestPlane(AutoTest):
 
     def assert_fence_sys_status(self, present, enabled, health):
         self.delay_sim_time(1)
-        self.drain_mav_unparsed()
+        self.do_timesync_roundtrip()
         m = self.assert_receive_message('SYS_STATUS', timeout=1)
         tests = [
             ("present", present, m.onboard_control_sensors_present),
@@ -1247,7 +1245,6 @@ class AutoTestPlane(AutoTest):
             m = self.mav.recv_match(type='FENCE_STATUS', blocking=True, timeout=2)
             if m is not None:
                 raise NotAchievedException("Got FENCE_STATUS unexpectedly")
-            self.drain_mav_unparsed()
             self.set_parameter("FENCE_ACTION", 0) # report only
             self.assert_fence_sys_status(True, False, True)
             self.set_parameter("FENCE_ACTION", 1) # RTL
@@ -2458,59 +2455,57 @@ function'''
         # Enable soaring (no automatic thermalling)
         self.set_rc(rc_chan, 1500)
 
-        # Enable speed to fly.
-        self.set_parameter("SOAR_CRSE_ARSPD", -1)
+        self.set_parameters({
+            "SOAR_CRSE_ARSPD": -1,  # Enable speed to fly.
+            "SOAR_VSPEED": 1,  # Set appropriate McCready.
+            "SIM_WIND_SPD": 0,
+        })
 
-        # Set appropriate McCready.
-        self.set_parameter("SOAR_VSPEED", 1)
-        self.set_parameter("SIM_WIND_SPD", 0)
-
-        # Wait a few seconds before determining the "trim" airspeed.
+        self.progress('Waiting a few seconds before determining the "trim" airspeed.')
         self.delay_sim_time(20)
         m = self.mav.recv_match(type='VFR_HUD', blocking=True)
         trim_airspeed = m.airspeed
+        self.progress("Using trim_airspeed=%f" % (trim_airspeed,))
 
         min_airspeed = self.get_parameter("ARSPD_FBW_MIN")
         max_airspeed = self.get_parameter("ARSPD_FBW_MAX")
 
-        # Add updraft
-        self.set_parameter("SIM_WIND_SPD", 1)
-        self.set_parameter('SIM_WIND_DIR_Z', 90)
-        self.delay_sim_time(20)
-        m = self.mav.recv_match(type='VFR_HUD', blocking=True)
+        if trim_airspeed > max_airspeed:
+            raise NotAchievedException("trim airspeed > max_airspeed (%f>%f)" %
+                                       (trim_airspeed, max_airspeed))
+        if trim_airspeed < min_airspeed:
+            raise NotAchievedException("trim airspeed < min_airspeed (%f<%f)" %
+                                       (trim_airspeed, min_airspeed))
 
-        if not m.airspeed < trim_airspeed and trim_airspeed > min_airspeed:
-            raise NotAchievedException("Airspeed did not reduce in updraft")
+        self.progress("Adding updraft")
+        self.set_parameters({
+            "SIM_WIND_SPD": 1,
+            'SIM_WIND_DIR_Z': 90,
+        })
+        self.progress("Waiting for vehicle to move slower in updraft")
+        self.wait_airspeed(0, trim_airspeed-0.5, minimum_duration=10, timeout=120)
 
-        # Add downdraft
+        self.progress("Adding downdraft")
         self.set_parameter('SIM_WIND_DIR_Z', -90)
-        self.delay_sim_time(20)
-        m = self.mav.recv_match(type='VFR_HUD', blocking=True)
+        self.progress("Waiting for vehicle to move faster in downdraft")
+        self.wait_airspeed(trim_airspeed+0.5, trim_airspeed+100, minimum_duration=10, timeout=120)
 
-        if not m.airspeed > trim_airspeed and trim_airspeed < max_airspeed:
-            raise NotAchievedException("Airspeed did not increase in downdraft")
+        self.progress("Zeroing wind and increasing McCready")
+        self.set_parameters({
+            "SIM_WIND_SPD": 0,
+            "SOAR_VSPEED": 2,
+        })
+        self.progress("Waiting for airspeed to increase with higher VSPEED")
+        self.wait_airspeed(trim_airspeed+0.5, trim_airspeed+100, minimum_duration=10, timeout=120)
 
-        # Zero the wind and increase McCready.
-        self.set_parameter("SIM_WIND_SPD", 0)
-        self.set_parameter("SOAR_VSPEED", 2)
-        self.delay_sim_time(20)
-        m = self.mav.recv_match(type='VFR_HUD', blocking=True)
-
-        if not m.airspeed > trim_airspeed and trim_airspeed < max_airspeed:
-            raise NotAchievedException("Airspeed did not increase with higher SOAR_VSPEED")
-
-        # Reduce McCready.
+        self.progress("Reducing McCready")
         self.set_parameter("SOAR_VSPEED", 0)
-        self.delay_sim_time(20)
-        m = self.mav.recv_match(type='VFR_HUD', blocking=True)
+        self.progress("Waiting for airspeed to decrease with lower VSPEED")
+        self.wait_airspeed(0, trim_airspeed-0.5, minimum_duration=10, timeout=120)
 
-        if not m.airspeed < trim_airspeed and trim_airspeed > min_airspeed:
-            raise NotAchievedException("Airspeed did not reduce with lower SOAR_VSPEED")
-
-        # Disarm
-        self.disarm_vehicle_expect_fail()
-
-        self.progress("Mission OK")
+        # takes too long to land, so just make it all go away:
+        self.disarm_vehicle(force=True)
+        self.reboot_sitl()
 
     def test_airspeed_drivers(self):
         airspeed_sensors = [
