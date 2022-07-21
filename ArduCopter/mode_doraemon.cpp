@@ -15,8 +15,6 @@ static Vector3f doraemon_vel_target_cms;      // velocity target (used by pos_ve
 static Vector3f doraemon_accel_target_cmss;   // acceleration target (used by pos_vel_accel controller vel_accel controller and accel controller)
 static uint32_t doraemon_update_time_ms;             // system time of last target update to pos_vel_accel, vel_accel or accel controller
 
-
-
 bool ModeDoraemon::init(bool ignore_checks)
 {
  
@@ -101,8 +99,8 @@ void ModeDoraemon::run()
                 }
                 int32_t s_lat; int32_t s_lng;
                 //gcs().send_text(MAV_SEVERITY_DEBUG, "s_lat:%s, s_lng:%s", matchedStr.c_str(), b_matchedStr.c_str());
-                s_lat = get_latlng_ardu(matchedStr);
-                s_lng = get_latlng_ardu(b_matchedStr);
+                s_lat = get_latlng_ardu(matchedStr.c_str());
+                s_lng = get_latlng_ardu(b_matchedStr.c_str());
                 if (judge_target(land_lat, land_lng, s_lat, s_lng, 1) > 0){
                     vp.push_back(Pair(s_lat, s_lng));
                     vp_cnt++;
@@ -370,11 +368,36 @@ void ModeDoraemon::set_yaw_state(bool use_yaw, float yaw_cd, bool use_yaw_rate, 
     }
 }
 
-int32_t ModeDoraemon::get_latlng_ardu(std::string strnum, uint32_t num_digits){
+float ModeDoraemon::judge_target(int32_t lat, int32_t lng, int32_t n_lat, int32_t n_lng, int mode){
+    Location now = Location();
+    Location next = Location();
+    float val;
+
+    if (mode == 1){
+        val = 2.0;
+    }else{
+        val = 0.5;
+    }
+
+    now.lat = lat;
+    now.lng = lng;
+    next.lat = n_lat;
+    next.lng = n_lng;
+
+    float dist_m = now.get_distance(next);
+
+    if (dist_m > val){
+        return dist_m;
+    }
+    return 0.0;
+}
+
+int32_t get_latlng_ardu(const char* num_chars, uint32_t num_digits){
     bool judge = false;
     uint32_t i = 0;
     uint32_t d_i = 0;
     std::string str = "";
+    std::string strnum = std::string(num_chars);
     int val = 0;
 
     if (strnum.length() == 0){
@@ -412,29 +435,4 @@ int32_t ModeDoraemon::get_latlng_ardu(std::string strnum, uint32_t num_digits){
         ret++;
     }
     return ret;
-}
-
-
-float ModeDoraemon::judge_target(int32_t lat, int32_t lng, int32_t n_lat, int32_t n_lng, int mode){
-    Location now = Location();
-    Location next = Location();
-    float val;
-
-    if (mode == 1){
-        val = 2.0;
-    }else{
-        val = 0.5;
-    }
-
-    now.lat = lat;
-    now.lng = lng;
-    next.lat = n_lat;
-    next.lng = n_lng;
-
-    float dist_m = now.get_distance(next);
-
-    if (dist_m > val){
-        return dist_m;
-    }
-    return 0.0;
 }

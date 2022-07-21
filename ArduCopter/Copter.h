@@ -660,6 +660,8 @@ private:
     // lua scripts use this to retrieve EKF failsafe state
     // returns true if the EKF failsafe has triggered
     bool has_ekf_failsafed() const override;
+    int32_t get_latlng_int(const char *num_chars, uint32_t num_digits) override;
+
 #endif // AP_SCRIPTING_ENABLED
     void rc_loop();
     void throttle_loop();

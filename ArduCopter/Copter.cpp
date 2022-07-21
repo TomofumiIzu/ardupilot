@@ -436,6 +436,11 @@ bool Copter::has_ekf_failsafed() const
     return failsafe.ekf;
 }
 
+int32_t Copter::get_latlng_int(const char *num_chars, uint32_t num_digits)
+{
+    return (get_latlng_ardu(num_chars, num_digits));
+}
+
 #endif // AP_SCRIPTING_ENABLED
 
 

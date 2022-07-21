@@ -1897,7 +1897,6 @@ public:
     };
 
     SubMode submode() const { return d_mode; }
-    int32_t get_latlng_ardu(std::string strnum, uint32_t num_digits = 7);
     float judge_target(int32_t lat, int32_t lng, int32_t n_lat, int32_t n_lng, int mode = 1);
 
 
@@ -1937,3 +1936,4 @@ private:
     int wrap_byte = 100;
     float speed = 5.0;
 };
+int32_t get_latlng_ardu(const char* num_chars, uint32_t num_digits = 7);

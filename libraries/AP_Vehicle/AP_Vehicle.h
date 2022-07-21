@@ -253,6 +253,8 @@ public:
     // returns true on success and control_value is set to a value in the range -1 to +1
     virtual bool get_control_output(AP_Vehicle::ControlOutput control_output, float &control_value) { return false; }
 
+    virtual int32_t get_latlng_int(const char *num_chars, uint32_t num_digits) { return 0; }
+
 #endif // AP_SCRIPTING_ENABLED
 
     // zeroing the RC outputs can prevent unwanted motor movement:
